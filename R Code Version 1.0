@@ -1,0 +1,102 @@
+setwd("~/Desktop/Ship_From_Store_Optimization")
+
+inventory <- read.csv("Inventory.csv", sep = ",", header = TRUE)
+orders <- read.csv("Orders.csv", sep = ",", header = TRUE)
+
+names(orders[,2]) <- "Item"
+colnames(orders)[2] <- c("Item")
+
+
+new <- merge.data.frame(inventory,orders, by = "Item") #merging the orders and inventory
+new <- new[c(10,1:9,11:14)] #re-arranging the columns to get the order_id first 
+
+attach(new)
+new <- new[order(OrderID,Item,Store),] #sorting as per order_id, item_id, store_id
+new[,1] <- as.factor(new[,1]) #converting the order_id to factor
+
+new$Mark_Down_Date1 <- as.Date(new$Mark_Down_Date,format = "%d-%m-%Y")
+install.packages("lubridate")
+library(lubridate)
+
+#converting the dates to date data types 
+
+class(new$Mark_Down_Date1)
+new$Closing_Date <- as.Date(new$Closing_Date, format = "%d-%m-%Y")
+new$ETD <- as.Date(new$ETD,format = "%d-%m-%Y" )
+new$current_date <- Sys.Date()
+
+#new date diff variable creation
+new$date_diff_ETD <- new$ETD - new$current_date
+new$date_diff_closing <- new$Closing_Date - new$current_date
+new$date_diff_markdown <- new$Mark_Down_Date1 - new$current_date
+
+#creation of shipping cost variable 
+new$ship_cost <- ifelse((new$date_diff_ETD<=1 & (new$ItemWeight>=0 & new$ItemWeight<1)),6.4,
+                 ifelse((new$date_diff_ETD<=1 & (new$ItemWeight>=1 & new$ItemWeight<2)),6.6,
+                 ifelse((new$date_diff_ETD<=1 & (new$ItemWeight>=2 & new$ItemWeight<3)),6.8,
+                 ifelse((new$date_diff_ETD<=1 & (new$ItemWeight>=3 & new$ItemWeight<4)),6.9,
+                 ifelse((new$date_diff_ETD<=1 & (new$ItemWeight>=4)),7,
+                 ifelse((new$date_diff_ETD<=2 & (new$ItemWeight>=0 & new$ItemWeight<1)),5,
+                 ifelse((new$date_diff_ETD<=2 & (new$ItemWeight>=1 & new$ItemWeight<2)),5,
+                 ifelse((new$date_diff_ETD<=2 & (new$ItemWeight>=2 & new$ItemWeight<3)),5,
+                 ifelse((new$date_diff_ETD<=2 & (new$ItemWeight>=3 & new$ItemWeight<4)),5,
+                 ifelse((new$date_diff_ETD<=2 & (new$ItemWeight>=4)),6,
+                 ifelse((new$date_diff_ETD<=3 & (new$ItemWeight>=0 & new$ItemWeight<1)),3.73,
+                 ifelse((new$date_diff_ETD<=3 & (new$ItemWeight>=1 & new$ItemWeight<2)),3.73,
+                 ifelse((new$date_diff_ETD<=3 & (new$ItemWeight>=2 & new$ItemWeight<3)),4.73,
+                 ifelse((new$date_diff_ETD<=3 & (new$ItemWeight>=3 & new$ItemWeight<4)),4.73,
+                 ifelse((new$date_diff_ETD<=3 & (new$ItemWeight>=4)),5.73,
+                 ifelse((new$date_diff_ETD<=4 & (new$ItemWeight>=0 & new$ItemWeight<1)),3.36,
+                 ifelse((new$date_diff_ETD<=4 & (new$ItemWeight>=1 & new$ItemWeight<2)),4.36,
+                 ifelse((new$date_diff_ETD<=4 & (new$ItemWeight>=2 & new$ItemWeight<3)),5.36,
+                 ifelse((new$date_diff_ETD<=4 & (new$ItemWeight>=3 & new$ItemWeight<4)),5.36,
+                 ifelse((new$date_diff_ETD<=4 & (new$ItemWeight>=4)),5.36,
+                 ifelse((new$date_diff_ETD>4 & (new$ItemWeight>=0 & new$ItemWeight<1)),2.34,
+                 ifelse((new$date_diff_ETD>4 & (new$ItemWeight>=1 & new$ItemWeight<2)),2.34,
+                 ifelse((new$date_diff_ETD>4 & (new$ItemWeight>=2 & new$ItemWeight<3)),2.34,
+                 ifelse((new$date_diff_ETD>4 & (new$ItemWeight>=3 & new$ItemWeight<4)),3.34,4.34))))))))))))))))))))))))
+
+
+#few orders do not have ETD, as a result the shipping cost is NULL. 
+#Assigning the ship cost based on the item weight and delivery time > 4 days
+
+new$ship_cost1 <- ifelse(((is.na(new$ship_cost))&(new$ItemWeight<1)),2.34,
+                  ifelse(((is.na(new$ship_cost))&(new$ItemWeight<2)),2.34,
+                  ifelse(((is.na(new$ship_cost))&(new$ItemWeight<3)),2.34,
+                  ifelse(((is.na(new$ship_cost))&(new$ItemWeight<3)),3.34,
+                  ifelse(((is.na(new$ship_cost))&(new$ItemWeight>4)),4.34,new$ship_cost)))))
+
+
+#calculating the discounted price
+new$disc_given <- new$Price - new$Item_Price
+
+#calculating the handling cost of the order at the item level
+new$handling_cost <- new$ManufacturingCost+new$LaborCost+new$ship_cost1
+
+#oppurtunity cost 
+new$oppurtunity_cost <- new$Item_Price-new$handling_cost
+
+new$profit_loss <- ifelse(new$oppurtunity_cost>0, "profit","loss")
+
+
+#assigning the priorities to the stores that are getting closed, items placed in markdown
+#and also the items that are marked for clearance
+
+new$store_priority <- ifelse(new$date_diff_closing<=30,1,0)
+new$clearance_priority <- ifelse(new$clearance_Item=="Y",1,0)
+new$marddown_priority <- ifelse(new$date_diff_markdown<=30,1,0)
+new$profit_priority <- ifelse(new$profit_loss=="profit",1,0)
+
+library(vegan)
+
+library("sqldf")
+?sqldf()
+
+#taking one order as an example and then creating a new data frame
+#normalizing the oppurtunity cost
+#adding the oppurtunity cost and the other priority variables calculated previously
+#to get the final score for the item in the order
+
+test <- sqldf("select OrderID,Item,Store,oppurtunity_cost,store_priority,clearance_priority,marddown_priority,profit_priority from new where OrderID='2059791305355' order by OrderID,Item,oppurtunity_cost desc")
+test$oppurtunity_cost <- decostand(test$oppurtunity_cost, method = "range")
+test$order_score <- test$oppurtunity_cost+test$store_priority+test$clearance_priority+test$marddown_priority+test$profit_priority
